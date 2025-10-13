@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'detector_node = intelligent_robot_contest.detector_node:main',
+            'ball_color_node = intelligent_robot_contest.ball_color_node:main',
         ],
     },
 )
