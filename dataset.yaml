@@ -1,0 +1,13 @@
+#yaml_path = f"/home/lab/dataset/dataset.yaml"
+
+#with open(yaml_path, "w") as f:
+# f.write(f"""
+    #path: /home/lab/dataset
+
+path: /home/wanglab/lab/dataset
+train: images/train
+val: images/train
+nc: 3
+names: ['red', 'blue', 'yellow']
+#""")
+
