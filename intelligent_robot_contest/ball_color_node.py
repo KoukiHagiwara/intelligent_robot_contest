@@ -49,7 +49,7 @@ class BallDetectorNode(Node):
 
         # シリアル通信の初期化
         try:
-            self.ser = serial.Serial(self.ARDUINO_PORT, 9600, timeout=1)
+            self.ser = serial.Serial(self.ARDUINO_PORT, 9600, timeout=1, write_timeout=0.01)
             time.sleep(2) # Arduinoの起動を待つ
             self.get_logger().info(f"Arduino on port {self.ARDUINO_PORT} connected.")
         except serial.SerialException as e:
@@ -60,7 +60,7 @@ class BallDetectorNode(Node):
         self.colors = [(0, 0, 255), (255, 0, 0), (0, 255, 255)] # BGR形式: 赤, 青, 黄
 
         # 定期的に処理を実行するタイマーを作成
-        self.timer = self.create_timer(0.4, self.timer_callback) # 10Hz (0.1秒ごと)
+        self.timer = self.create_timer(0.2, self.timer_callback) # 10Hz (0.1秒ごと)
 
     def timer_callback(self):
         ret, frame = self.cap.read()
@@ -102,7 +102,13 @@ class BallDetectorNode(Node):
                 
                 # データを "<X座標,距離(cm),クラスID>\n" の形式で送信
                 data_to_send = f"<{center_x_to_send},{distance_cm_to_send},{class_id_to_send}>\n"
-                self.ser.write(data_to_send.encode('utf-8'))
+                # タイムアウトが発生する可能性があるので、try...exceptで囲みます。
+                try:
+                    self.ser.write(data_to_send.encode('utf-8'))
+                except serial.SerialTimeoutException:
+                    self.get_logger().warn("Arduinoへの書き込みがタイムアウトしました。")
+
+               
                 
                 # ★★★ ここを修正しました ★★★
                 # ログにはメートル単位の距離と送信データを両方表示
@@ -143,4 +149,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
