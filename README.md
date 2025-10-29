@@ -16,6 +16,15 @@ $ git clone https://github.com/KoukiHagiwara/intelligent_robot_contest.git
 $ ros2 run intelligent_robot_contest detector_node
 ```
 
+## Arduinoのコード
+以下がArduino側のコードです
+- カメラが読み取った三色のボールに対して三色のLEDを光らせる
+
+```
+$ cat arduino.ino
+```
+
+
 ## 動作環境
 - Python 3.10
 - Ubuntu 20.04 LTS
