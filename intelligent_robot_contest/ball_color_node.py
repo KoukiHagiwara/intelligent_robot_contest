@@ -13,7 +13,7 @@ import time
 class BallDetectorNode(Node):
     def __init__(self):
         super().__init__('ball_color_node')
-        self.get_logger().info('Ball Detector Node has been started.')
+        self.get_logger().info('Ball Detector Node with LED Control has been started.')
 
         # --- 設定項目 ---
         # ★★★★★ あなたが学習させたモデルの正しいパスを指定！ ★★★★★
@@ -44,23 +44,25 @@ class BallDetectorNode(Node):
 
         self.cap.set(3, 640)
         self.cap.set(4, 480)
-        self.frame_width = int(self.cap.get(3))
-        self.frame_center_x = self.frame_width // 2
 
         # シリアル通信の初期化
+        self.ser = None
         try:
-            self.ser = serial.Serial(self.ARDUINO_PORT, 9600, timeout=1, write_timeout=0.01)
+            self.ser = serial.Serial(self.ARDUINO_PORT, 9600, timeout=1)
             time.sleep(2) # Arduinoの起動を待つ
             self.get_logger().info(f"Arduino on port {self.ARDUINO_PORT} connected.")
         except serial.SerialException as e:
             self.get_logger().error(f"エラー: シリアルポート {self.ARDUINO_PORT} を開けませんでした: {e}")
-            self.ser = None
-        
+       
         # 描画用の色設定 (クラスID 0, 1, 2... に対応)
-        self.colors = [(0, 0, 255), (255, 0, 0), (0, 255, 255)] # BGR形式: 赤, 青, 黄
+        # BGR形式: 0:赤, 1:青, 2:黄 と仮定
+        self.colors = [(0, 0, 255), (255, 0, 0), (0, 255, 255)] 
+
+        # 最後に送信したコマンドを保存する変数
+        self.last_command_sent = ''
 
         # 定期的に処理を実行するタイマーを作成
-        self.timer = self.create_timer(0.2, self.timer_callback) # 10Hz (0.1秒ごと)
+        self.timer = self.create_timer(0.1, self.timer_callback) # 10Hz (0.1秒ごと)
 
     def timer_callback(self):
         ret, frame = self.cap.read()
@@ -75,7 +77,6 @@ class BallDetectorNode(Node):
             boxes = res.boxes.cpu().numpy()
             for box in boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                center_x = (x1 + x2) // 2
                 pixel_diameter = ((x2 - x1) + (y2 - y1)) / 2.0
                 
                 distance_cm = 0
@@ -83,60 +84,61 @@ class BallDetectorNode(Node):
                     distance_cm = (self.REAL_BALL_DIAMETER_CM * self.FOCAL_LENGTH) / pixel_diameter
                 
                 detected_balls.append({
-                    'center_x': center_x, 
                     'distance': distance_cm, 
                     'box': (x1, y1, x2, y2), 
                     'class_id': int(box.cls[0])
                 })
         
+        # デフォルトのコマンドを 'N' (消灯) に設定
+        command_to_send = 'N'
+
         # カメラに最も近いボールを選択
         if detected_balls:
             nearest_ball = min(detected_balls, key=lambda b: b['distance'])
+            class_id = nearest_ball['class_id']
             
-            # Arduinoに情報を送信
-            if self.ser and self.ser.is_open:
-                # 送信するデータを準備
-                center_x_to_send = int(nearest_ball['center_x'])
-                distance_cm_to_send = int(nearest_ball['distance'])
-                class_id_to_send = nearest_ball['class_id']
-                
-                # データを "<X座標,距離(cm),クラスID>\n" の形式で送信
-                data_to_send = f"<{center_x_to_send},{distance_cm_to_send},{class_id_to_send}>\n"
-                # タイムアウトが発生する可能性があるので、try...exceptで囲みます。
-                try:
-                    self.ser.write(data_to_send.encode('utf-8'))
-                except serial.SerialTimeoutException:
-                    self.get_logger().warn("Arduinoへの書き込みがタイムアウトしました。")
-
-               
-                
-                # ★★★ ここを修正しました ★★★
-                # ログにはメートル単位の距離と送信データを両方表示
-                distance_m = nearest_ball['distance'] / 100.0
-                class_name_log = self.model.names[class_id_to_send]
-                self.get_logger().info(
-                    f"ターゲット: {class_name_log}, "
-                    f"距離: {distance_m:.2f} m, "
-                    f"送信データ: {data_to_send.strip()}"
-                )
-
+            # ★★★ ここからが主な変更点 ★★★
+            # クラスIDに基づいて送信するコマンドを決定
+            # class_id 0 -> 赤 (R)
+            # class_id 1 -> 青 (B)
+            # class_id 2 -> 黄 (Y)
+            # ※お使いのモデルのクラスIDと色が合っているか確認してください
+            if class_id == 0:
+                command_to_send = 'R'
+            elif class_id == 1:
+                command_to_send = 'B'
+            elif class_id == 2:
+                command_to_send = 'Y'
+            
             # 描画処理
             x1, y1, x2, y2 = nearest_ball['box']
-            class_id = nearest_ball['class_id']
-            # モデルのクラス名を取得
             class_name = self.model.names[class_id]
             color = self.colors[class_id % len(self.colors)]
             label = f"{class_name}: {nearest_ball['distance'] / 100:.2f} m"
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
+        # ★★★ Arduinoへのコマンド送信部分 ★★★
+        # 状態が変化した場合のみコマンドを送信
+        if command_to_send != self.last_command_sent:
+            if self.ser and self.ser.is_open:
+                try:
+                    self.ser.write(command_to_send.encode('utf-8'))
+                    self.get_logger().info(f"Sent command to Arduino: '{command_to_send}'")
+                    self.last_command_sent = command_to_send
+                except serial.SerialException as e:
+                    self.get_logger().warn(f"Arduinoへの書き込みに失敗しました: {e}")
+
+        # 映像の表示と終了処理
         cv2.imshow('ROS2 Ball Detector', frame)
         if cv2.waitKey(1) & 0xFF == 27: # ESCキー
+            # 終了時にLEDを消灯する
+            if self.ser and self.ser.is_open:
+                self.ser.write('N'.encode('utf-8'))
+                self.ser.close()
             self.timer.cancel()
             self.cap.release()
             cv2.destroyAllWindows()
-            if self.ser and self.ser.is_open:
-                self.ser.close()
             rclpy.shutdown()
 
 def main(args=None):
