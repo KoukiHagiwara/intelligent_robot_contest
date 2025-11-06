@@ -15,6 +15,10 @@ $ git clone https://github.com/KoukiHagiwara/intelligent_robot_contest.git
 ```
 $ ros2 run intelligent_robot_contest detector_node
 ```
+```
+$ ros2 run intelligent_robot_contest ball_color_node
+```
+
 
 ## Arduinoのコード
 以下がArduino側のコードです
