@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+#距離、x座標、色の3つを送る
 import os
 from ament_index_python.packages import get_package_share_directory
 import rclpy
@@ -112,29 +113,31 @@ class BallDetectorNode(Node):
 
         # --- 送信データ生成 ---
         command_code = 'N'
-        dist_val = 0
+        dist_val_cm = 0
         center_x_val = 320 # デフォルトは中央
-
+        
         if final_target:
             class_id = final_target['class_id']
             # ★ポイント: 数値を整数(int)にして細かい変動を無視する
-            dist_val = int(final_target['distance'])
+            dist_val_cm = int(final_target['distance'])
             center_x_val = int(final_target['center_x'])
-            
+            # ★変更点2: 画面表示用にメートルに変換する
+            dist_val_meter = dist_val_cm / 100.0
+
             x1, y1, x2, y2 = final_target['box']
             
-            if dist_val <= self.MAX_CHASE_DISTANCE:
+            if dist_val_cm <= self.MAX_CHASE_DISTANCE:
                 if class_id == 0: command_code = 'R'
                 elif class_id == 1: command_code = 'B'
                 elif class_id == 2: command_code = 'Y'
                 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                text = f"LOCK {command_code}:{dist_val}cm"
+                text = f"LOCK {command_code}:{dist_val_meter:.2f}m"
                 cv2.putText(frame, text, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
             else:
                 command_code = 'N'
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-                text = f"WAIT {dist_val}cm"
+                text = f"WAIT {dist_val_meter:.2f}m"
                 cv2.putText(frame, text, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
 
         elif self.locked_target_id is not None:
@@ -144,7 +147,7 @@ class BallDetectorNode(Node):
         
         # データを文字列にする (例: "R:45:320\n")
         # 整数に丸めているので、0.9cm以下の変化や0.9ピクセル以下の変化では文字列が変わりません
-        send_str = f"{command_code}:{dist_val}:{center_x_val}\n"
+        send_str = f"{command_code}:{dist_val_cm}:{center_x_val}\n"
         
         # 前回送信した文字列と「完全に同じ」なら送信しない
         if send_str != self.last_sent_str:

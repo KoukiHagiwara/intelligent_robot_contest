@@ -16,7 +16,7 @@ $ git clone https://github.com/KoukiHagiwara/intelligent_robot_contest.git
 ```
 $ ros2 run intelligent_robot_contest detector_node
 ```
-- ボールとカメラの距離と色、画面内でのx軸を送る、実機を想定し認識したボールの色をロックする
+- ボールとカメラの距離と色、画面内でのx座標を送る、実機を想定し認識したボールの色をロックする
 ```
 $ ros2 run intelligent_robot_contest ball_color_node
 ``` 

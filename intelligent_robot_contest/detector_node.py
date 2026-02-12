@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+#arduino接続なしでyolo動かせるか確認できるコード
 import os
 from ament_index_python.packages import get_package_share_directory
 import rclpy
@@ -7,35 +7,28 @@ from rclpy.node import Node
 import cv2
 import numpy as np
 from ultralytics import YOLO
-import serial
+# import serial  # 実験用なのでシリアル通信はオフ
 import time
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 
 class BallDetectorNode(Node):
     def __init__(self):
-        super().__init__('ball_detector_node')
-        self.get_logger().info('Ball Detector Node has been started.')
+        super().__init__('ball_color_node')
+        self.get_logger().info('Ball Detector Node (Experiment Mode: Show ALL) started.')
 
         # --- 設定項目 ---
-        # ★★★★★ あなたが学習させたモデルの正しいパスを指定！ ★★★★★
-        
-        # まず、このパッケージのshareディレクトリの絶対パスを取得
-        package_share_directory = get_package_share_directory('intelligent_robot_contest')
-        # 次に、shareディレクトリからの相対パスでモデルファイルのフルパスを組み立てる
-        model_path = os.path.join(package_share_directory, 'models', 'best.pt')
+        try:
+            package_share_directory = get_package_share_directory('intelligent_robot_contest')
+            model_path = os.path.join(package_share_directory, 'models', 'best.pt')
+        except:
+            model_path = 'best.pt' # パッケージが見つからない場合の対策
 
-        # ログに出力して、パスが正しいか確認すると、デバッグが楽になります
         self.get_logger().info(f"Loading model from: {model_path}")
 
-        self.model = YOLO(model_path)
-
-        # ★★★★★ ボールの実際の直径（cm）を正確に設定！ ★★★★★
+        # ★★★★★ パラメータ設定 ★★★★★
         self.REAL_BALL_DIAMETER_CM = 6.8
-        # ★★★★★ 事前にキャリブレーションして得たカメラの焦点距離を設定！ ★★★★★
         self.FOCAL_LENGTH = 718.409779
-        
-        # ★★★★★ Arduinoが接続されているUSBポートを指定！ ★★★★★
-        # ターミナルで `ls /dev/tty*` を実行して確認。`ttyUSB0` や `ttyACM0` など。
-        self.ARDUINO_PORT = '/dev/ttyACM0' 
         
         # --- 設定項目はここまで ---
 
@@ -52,23 +45,26 @@ class BallDetectorNode(Node):
 
         self.cap.set(3, 640)
         self.cap.set(4, 480)
-        self.frame_width = int(self.cap.get(3))
-        self.frame_center_x = self.frame_width // 2
 
-        # シリアル通信の初期化
-        try:
-            self.ser = serial.Serial(self.ARDUINO_PORT, 9600, timeout=1)
-            time.sleep(2) # Arduinoの起動を待つ
-            self.get_logger().info(f"Arduino on port {self.ARDUINO_PORT} connected.")
-        except serial.SerialException as e:
-            self.get_logger().error(f"エラー: シリアルポート {self.ARDUINO_PORT} を開けませんでした: {e}")
-            self.ser = None
-        
-        # 色設定
-        self.colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+        # 実験用なのでシリアル通信は無効化します
+        self.ser = None
+        # try:
+        #     self.ARDUINO_PORT = '/dev/ttyACM0' 
+        #     self.ser = serial.Serial(self.ARDUINO_PORT, 9600, timeout=1)
+        #     time.sleep(2)
+        #     self.get_logger().info(f"Arduino connected.")
+        # except Exception as e:
+        #     self.get_logger().warn(f"Arduino not connected (Experiment Mode): {e}")
+       
+        # 描画用の色設定 (クラスID 0, 1, 2... に対応)
+        self.colors = [(0, 0, 255), (255, 0, 0), (0, 255, 255)] 
 
-        # 定期的に処理を実行するタイマーを作成
-        self.timer = self.create_timer(0.1, self.timer_callback) # 10Hz (0.1秒ごと)
+        # ★★★ 変更点1: 画像配信用のパブリッシャーと変換器を作成 ★★★
+        # トピック名: 'processed_image'
+        self.image_pub = self.create_publisher(Image, 'processed_image', 10)
+        self.bridge = CvBridge()
+        # 定期的に処理を実行するタイマー (10Hz)
+        self.timer = self.create_timer(0.1, self.timer_callback)
 
     def timer_callback(self):
         ret, frame = self.cap.read()
@@ -83,48 +79,73 @@ class BallDetectorNode(Node):
             boxes = res.boxes.cpu().numpy()
             for box in boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                center_x = (x1 + x2) // 2
                 pixel_diameter = ((x2 - x1) + (y2 - y1)) / 2.0
                 
                 distance_cm = 0
                 if pixel_diameter > 0:
                     distance_cm = (self.REAL_BALL_DIAMETER_CM * self.FOCAL_LENGTH) / pixel_diameter
                 
-                detected_balls.append({'center_x': center_x, 'distance': distance_cm, 'box': (x1, y1, x2, y2), 'class_id': int(box.cls[0])})
+                detected_balls.append({
+                    'distance': distance_cm, 
+                    'box': (x1, y1, x2, y2), 
+                    'class_id': int(box.cls[0])
+                })
         
-        # カメラに最も近いボールを選択
-        if detected_balls:
-            nearest_ball = min(detected_balls, key=lambda b: b['distance'])
-            
-            # Arduinoに情報を送信
-            if self.ser and self.ser.is_open:
-                # データを "<X座標,距離>\n" の形式で送信
-                data_to_send = f"<{int(nearest_ball['center_x'])},{int(nearest_ball['distance'])}>\n"
-                self.ser.write(data_to_send.encode('utf-8'))
-                self.get_logger().info(f"Sent to Arduino: {data_to_send.strip()}")
+        # ★★★ 変更点: すべての検出されたボールを描画するループ ★★★
+        for ball in detected_balls:
+            x1, y1, x2, y2 = ball['box']
+            class_id = ball['class_id']
+            dist_cm = ball['distance']
+            dist_m = dist_cm / 100.0 # メートル変換
 
-            # 描画処理
-            x1, y1, x2, y2 = nearest_ball['box']
-            class_id = nearest_ball['class_id']
+            # クラス名取得（モデルに名前定義があればそれを使う、なければID）
+            if hasattr(self.model, 'names'):
+                class_name = self.model.names[class_id]
+            else:
+                class_name = str(class_id)
+
+            # 色決定
             color = self.colors[class_id % len(self.colors)]
-            label = f"Target: {nearest_ball['distance'] / 100:.2f} m"
+            
+            # ラベル作成 (例: "Red: 1.25 m")
+            label = f"{class_name}: {dist_m:.2f} m"
+            
+            # 描画
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        
-        cv2.imshow('ROS2 Ball Detector', frame)
+        # ★★★ 変更点2: imshowを廃止し、ROSトピックとして配信 ★★★
+        try:
+            # OpenCV画像(BGR)をROSメッセージに変換
+            ros_image_msg = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+            # トピック 'processed_image' に配信
+            self.image_pub.publish(ros_image_msg)
+        except Exception as e:
+            self.get_logger().error(f"画像の配信に失敗: {e}")
+
+        # 映像の表示と終了処理
+        cv2.imshow('Experiment Ball Detector', frame)
         if cv2.waitKey(1) & 0xFF == 27: # ESCキー
-            self.timer.cancel()
-            self.cap.release()
-            cv2.destroyAllWindows()
-            rclpy.shutdown()
+           self.cleanup()
+
+    def cleanup(self):
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+        self.timer.cancel()
+        self.cap.release()
+        cv2.destroyAllWindows()
+        self.destroy_node()
+        rclpy.shutdown()
 
 def main(args=None):
     rclpy.init(args=args)
     detector_node = BallDetectorNode()
-    rclpy.spin(detector_node)
-    # クリーンアップ
-    detector_node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(detector_node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if rclpy.ok():
+            detector_node.cleanup()
 
 if __name__ == '__main__':
     main()
